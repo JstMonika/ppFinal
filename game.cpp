@@ -27,7 +27,8 @@ private:
     pthread_mutex_t mutex;
 
     // Calculating Time
-    int updateCount = 0;
+    int updateCount_cpu = 0;
+    int updateCount_gpu = 0;
     float intervalDuration = 1.0f; // Default interval duration in seconds
     
 public:
@@ -173,27 +174,22 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            auto updateStart = std::chrono::high_resolution_clock::now();
             updateCPU();
-            auto updateEnd = std::chrono::high_resolution_clock::now();
-            float updateDuration = std::chrono::duration<float>(updateEnd - updateStart).count();
             
-            updateCount++;
+            updateCount_cpu++;
 
             // get time per update
             
             if (deltaTime >= intervalDuration) {
-                updateCount = 0;
-
-                cpuFrameTime = updateCount;
-
+                cpuFrameTime = updateCount_cpu;
+                updateCount_cpu = 0;
                 lastUpdate = currentTime;
             }
         }
     }
 
     void GPU() {
-
+        
     }
     
     void handleEvent(const sf::Event& event) {
@@ -207,6 +203,8 @@ public:
                     break;
                 case sf::Keyboard::R:
                     randomize();
+                    break;
+                default:
                     break;
             }
         }
