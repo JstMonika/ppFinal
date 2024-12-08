@@ -35,6 +35,12 @@ private:
     // Calculating Time
     int updateCountCPU = 0;
     int updateCountCPUPP = 0;
+    int updateCountGPU = 0;
+    int totalUpdateCountCPU = 0; // Total updates for CPU
+    int totalUpdateCountCPUPP = 0; // Total updates for GPU
+    int totalUpdateCountGPU = 0; // Total updates for GPU
+    int maxUpdates = 300;
+
 
     float intervalDuration = 1.0f; // Default interval duration in seconds
     
@@ -218,13 +224,15 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            auto updateStart = std::chrono::high_resolution_clock::now();
-            updateCPU();
-            auto updateEnd = std::chrono::high_resolution_clock::now();
-            float updateDuration = std::chrono::duration<float>(updateEnd - updateStart).count();
-            
-            updateCountCPU++;
+            if (totalUpdateCountCPU >= maxUpdates) {
+                break;
+            }
 
+            updateCPU();
+            
+            updateCountCPUCPU++;
+            totalUpdateCountCPU++; // Increment total CPU updates
+            std::cout << totalUpdateCountCPU << std::endl;
             // get time per update
             
             if (deltaTime >= intervalDuration) {
@@ -236,7 +244,7 @@ public:
     }
 
     void GPU() {
-
+        
     }
 
     void CPUParallel() {
@@ -275,6 +283,8 @@ public:
                     break;
                 case sf::Keyboard::R:
                     randomize();
+                    break;
+                default:
                     break;
             }
         }
