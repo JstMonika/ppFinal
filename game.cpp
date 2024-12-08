@@ -8,23 +8,27 @@
 
 class GameOfLife {
 private:
-    int width, height;
-    std::vector<std::vector<bool>> gridCPU;  // CPU grid
-    std::vector<std::vector<bool>> nextGridCPU;
-    std::vector<std::vector<bool>> gridGPU;  // GPU grid
-    std::vector<std::vector<bool>> nextGridGPU;
     sf::RenderWindow window;
     float cellSize = 3.0f;
-    float updateInterval = 0.1f; // seconds
     bool windowIsOpen = true;
     bool isPaused = false;
     sf::Font font;
     sf::Text speedTextCPU;
     sf::Text speedTextGPU;
     sf::Clock cpuClock, gpuClock;
-    float cpuFrameTime = 0.0f, gpuFrameTime = 0.0f;
+    int cpuFrameTime = 0, gpuFrameTime = 0;
+
+    int width, height;
+    std::vector<std::vector<bool>> gridCPU;  // CPU grid
+    std::vector<std::vector<bool>> nextGridCPU;
+    std::vector<std::vector<bool>> gridGPU;  // GPU grid
+    std::vector<std::vector<bool>> nextGridGPU;
 
     pthread_mutex_t mutex;
+
+    // Calculating Time
+    int updateCount = 0;
+    float intervalDuration = 1.0f; // Default interval duration in seconds
     
 public:
     GameOfLife(int w, int h) : width(w), height(h) {
@@ -62,7 +66,7 @@ public:
     void randomize() {
         for(int y = 0; y < height; y++) {
             for(int x = 0; x < width; x++) {
-                int Rvalue = rand() % 7;
+                int Rvalue = rand() % 3;
                 bool value = Rvalue == 0;
 
                 gridCPU[y][x] = value;
@@ -90,7 +94,6 @@ public:
 
     void updateCPU() {
         if(isPaused) return;
-        
         
         for(int y = 0; y < height; y++) {
             for(int x = 0; x < width; x++) {
@@ -124,8 +127,8 @@ public:
     }
    
     void updateSpeedText() {
-        speedTextCPU.setString("CPU FPS: " + std::to_string(1.0f/cpuFrameTime));
-        speedTextGPU.setString("GPU FPS: " + std::to_string(1.0f/gpuFrameTime));
+        speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFrameTime));
+        speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFrameTime));
     }
 
     static void* CPUThread(void* arg) {
@@ -169,11 +172,21 @@ public:
         while(windowIsOpen) {
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
-            cpuFrameTime = deltaTime;
-            gpuFrameTime = deltaTime;
+
+            auto updateStart = std::chrono::high_resolution_clock::now();
+            updateCPU();
+            auto updateEnd = std::chrono::high_resolution_clock::now();
+            float updateDuration = std::chrono::duration<float>(updateEnd - updateStart).count();
             
-            if (deltaTime >= updateInterval) {
-                updateCPU();
+            updateCount++;
+
+            // get time per update
+            
+            if (deltaTime >= intervalDuration) {
+                updateCount = 0;
+
+                cpuFrameTime = updateCount;
+
                 lastUpdate = currentTime;
             }
         }
@@ -257,7 +270,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(200, 100);  // 80x60 grid
+    GameOfLife game(300, 300);  // 80x60 grid
     game.run();
     return 0;
 }
