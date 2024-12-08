@@ -27,8 +27,12 @@ private:
     pthread_mutex_t mutex;
 
     // Calculating Time
-    int updateCount_cpu = 0;
-    int updateCount_gpu = 0;
+    int updateCountCPU = 0;
+    int updateCountGPU = 0;
+    int totalUpdateCountCPU = 0; // Total updates for CPU
+    int totalUpdateCountGPU = 0; // Total updates for GPU
+    int maxUpdates = 300;
+
     float intervalDuration = 1.0f; // Default interval duration in seconds
     
 public:
@@ -174,15 +178,20 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
+            if (totalUpdateCountCPU >= maxUpdates) {
+                break;
+            }
+
             updateCPU();
             
-            updateCount_cpu++;
-
+            updateCountCPU++;
+            totalUpdateCountCPU++; // Increment total CPU updates
+            std::cout << totalUpdateCountCPU << std::endl;
             // get time per update
             
             if (deltaTime >= intervalDuration) {
-                cpuFrameTime = updateCount_cpu;
-                updateCount_cpu = 0;
+                cpuFrameTime = updateCountCPU;
+                updateCountCPU = 0;
                 lastUpdate = currentTime;
             }
         }
