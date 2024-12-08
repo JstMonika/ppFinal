@@ -3,7 +3,7 @@ CXX = g++
 CXXFLAGS = -Wall
 
 # Libraries
-LIBS = -lsfml-graphics -lsfml-window -lsfml-system -lX11 -pthread
+LIBS = -lsfml-graphics -lsfml-window -lsfml-system -lX11 -pthread -fopenmp
 
 # File names
 TARGET = game_of_life
