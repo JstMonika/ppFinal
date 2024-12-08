@@ -5,6 +5,8 @@
 #include <vector>
 #include <chrono>
 #include <thread>
+#include <omp.h>
+
 
 class GameOfLife {
 private:
@@ -15,19 +17,25 @@ private:
     sf::Font font;
     sf::Text speedTextCPU;
     sf::Text speedTextGPU;
-    sf::Clock cpuClock, gpuClock;
-    int cpuFrameTime = 0, gpuFrameTime = 0;
+    sf::Text speedTextCPUPP;
+    sf::Clock cpuClock, gpuClock, cpuppClock;
+    int cpuFrameTime = 0, gpuFrameTime = 0, cpuPPFrameTime = 0;
 
     int width, height;
     std::vector<std::vector<bool>> gridCPU;  // CPU grid
     std::vector<std::vector<bool>> nextGridCPU;
     std::vector<std::vector<bool>> gridGPU;  // GPU grid
     std::vector<std::vector<bool>> nextGridGPU;
+    std::vector<std::vector<bool>> gridCPUPP;  // CPUPP grid
+    std::vector<std::vector<bool>> nextGridCPUPP;
+
 
     pthread_mutex_t mutex;
 
     // Calculating Time
-    int updateCount = 0;
+    int updateCountCPU = 0;
+    int updateCountCPUPP = 0;
+
     float intervalDuration = 1.0f; // Default interval duration in seconds
     
 public:
@@ -37,9 +45,11 @@ public:
         nextGridCPU = gridCPU;
         gridGPU = gridCPU;
         nextGridGPU = gridCPU;
-        
-        // 創建雙倍寬度的窗口
-        window.create(sf::VideoMode(width * cellSize * 2, height * cellSize + 50), "Game of Life - CPU vs GPU");
+        gridCPUPP = gridCPU;
+        nextGridCPUPP = gridCPU;
+
+        // 創建三倍寬度的窗口
+        window.create(sf::VideoMode(width * cellSize * 3, height * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
         
         // Initialize font and text
         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
@@ -52,6 +62,11 @@ public:
         speedTextCPU.setFillColor(sf::Color::White);
         speedTextCPU.setPosition(10, height * cellSize + 10);
         
+        speedTextCPUPP.setFont(font);
+        speedTextCPUPP.setCharacterSize(20);
+        speedTextCPUPP.setFillColor(sf::Color::White);
+        speedTextCPUPP.setPosition(width * 2 * cellSize + 10, height * cellSize + 10);
+
         // GPU 文字
         speedTextGPU.setFont(font);
         speedTextGPU.setCharacterSize(20);
@@ -71,6 +86,8 @@ public:
 
                 gridCPU[y][x] = value;
                 gridGPU[y][x] = value;
+                gridCPUPP[y][x] = value;
+
             }
         }
     }
@@ -107,7 +124,25 @@ public:
         gridCPU.swap(nextGridCPU);
         pthread_mutex_unlock(&mutex);
     }
-    
+
+    void updateCPUParallel() {
+        if (isPaused) return;
+
+        #pragma omp parallel for collapse(2)
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int neighbors = countNeighbors(gridCPUPP, x, y);
+                bool currentCell = gridCPUPP[y][x];
+                nextGridCPU[y][x] = (neighbors == 3) || (currentCell && neighbors == 2);
+            }
+        }
+
+        pthread_mutex_lock(&mutex);
+        gridCPUPP.swap(nextGridCPUPP);
+        pthread_mutex_unlock(&mutex);
+        
+    }
+
     void updateGPU() {
         if(isPaused) return;
         
@@ -129,6 +164,7 @@ public:
     void updateSpeedText() {
         speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFrameTime));
         speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFrameTime));
+        speedTextCPUPP.setString("CPUPP FPS: " + std::to_string(cpuPPFrameTime));
     }
 
     static void* CPUThread(void* arg) {
@@ -143,11 +179,19 @@ public:
         return NULL;   
     }
     
+    static void* CPUPPThread(void* arg) {
+        GameOfLife* game = static_cast<GameOfLife*>(arg);
+        game->CPUParallel();
+        return NULL;
+    }
+
     void run() {
-        pthread_t cpuThread, gpuThread;
+        pthread_t cpuThread, cpuPPThread, gpuThread;
 
         pthread_create(&cpuThread, NULL, CPUThread, this);
         pthread_create(&gpuThread, NULL, GPUThread, this);
+        pthread_create(&cpuPPThread, NULL, CPUPPThread, this);
+
 
         while(window.isOpen()) {
             sf::Event event;
@@ -164,6 +208,7 @@ public:
 
         pthread_join(cpuThread, NULL);
         pthread_join(gpuThread, NULL);
+        pthread_join(cpuPPThread, NULL);
     }
 
     void CPU() {
@@ -178,15 +223,13 @@ public:
             auto updateEnd = std::chrono::high_resolution_clock::now();
             float updateDuration = std::chrono::duration<float>(updateEnd - updateStart).count();
             
-            updateCount++;
+            updateCountCPU++;
 
             // get time per update
             
             if (deltaTime >= intervalDuration) {
-                updateCount = 0;
-
-                cpuFrameTime = updateCount;
-
+                cpuFrameTime = updateCountCPU;
+                updateCountCPU = 0;
                 lastUpdate = currentTime;
             }
         }
@@ -194,6 +237,31 @@ public:
 
     void GPU() {
 
+    }
+
+    void CPUParallel() {
+        auto lastUpdate = std::chrono::high_resolution_clock::now();
+        
+        while(windowIsOpen) {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
+
+            auto updateStart = std::chrono::high_resolution_clock::now();
+            updateCPUParallel();
+            auto updateEnd = std::chrono::high_resolution_clock::now();
+            float updateDuration = std::chrono::duration<float>(updateEnd - updateStart).count();
+            
+            updateCountCPUPP++;
+
+            // get time per update
+            
+            if (deltaTime >= intervalDuration) {
+
+                cpuPPFrameTime = updateCountCPUPP;
+                updateCountCPUPP = 0;
+                lastUpdate = currentTime;
+            }
+        }
     }
     
     void handleEvent(const sf::Event& event) {
@@ -232,6 +300,10 @@ public:
         separator.setFillColor(sf::Color::White);
         separator.setPosition(width * cellSize, 0);
         
+        sf::RectangleShape separator2(sf::Vector2f(2, height * cellSize + 50));
+        separator2.setFillColor(sf::Color::White);
+        separator2.setPosition(width * 2 * cellSize, 0);
+
         // 繪製 CPU side
         sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellCPU.setFillColor(sf::Color::White);
@@ -245,6 +317,7 @@ public:
             }
         }
         
+
         // 繪製 GPU side
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
@@ -258,9 +331,24 @@ public:
             }
         }
         
+        // 繪製 CPUPP side
+        sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
+        cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
+
+        for(int y = 0; y < height; y++) {
+            for(int x = 0; x < width; x++) {
+                if(gridCPUPP[y][x]) {
+                    cellCPUPP.setPosition(width * 2 * cellSize + x * cellSize, y * cellSize);
+                    window.draw(cellCPUPP);
+                }
+            }
+        }
+
         window.draw(separator);
+        window.draw(separator2);
         window.draw(speedTextCPU);
         window.draw(speedTextGPU);
+        window.draw(speedTextCPUPP);
         window.display();
 
         pthread_mutex_unlock(&mutex);
@@ -270,7 +358,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(300, 300);  // 80x60 grid
+    GameOfLife game(100, 100);  // 80x60 grid
     game.run();
     return 0;
 }
