@@ -9,6 +9,50 @@
 #include <sched.h>
 #include <pthread.h>
 
+
+const int DRAW_FREQUENCY = 50;
+const int MAX_UPDATES = 500000;
+
+__constant__ int d_width, d_height, d_draw_frequency;
+
+__global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    nextGrid[y * (d_width + 2) + x] = false;
+    nextGrid[(y + 2) * (d_width + 2) + x] = false;
+    nextGrid[y * (d_width + 2) + x + 2] = false;
+    nextGrid[(y + 2) * (d_width + 2) + x + 2] = false;
+    
+    int idx = (y + 1) * (d_width + 2) + (x + 1);
+    int c, neighbors, dx, dy, nx, ny;
+    bool currentCell;
+
+    for (c = 0; c < d_draw_frequency; c++) {
+        neighbors = 0;
+
+        // unroll
+        for (dy = -1; dy <= 1; dy++) {
+            for (dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+
+                nx = x + dx;
+                ny = y + dy;
+
+                if (grid[ny * (d_width + 2) + nx]) neighbors++;
+            }
+        }
+
+        currentCell = grid[idx];
+        nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
+
+        // copy nextGrid to grid
+        grid[idx] = nextGrid[idx];
+    }
+
+    drawGrid[idx] = grid[idx];
+}
+
 class GameOfLife {
 private:
     sf::RenderWindow window;
@@ -19,26 +63,24 @@ private:
     sf::Text speedTextGPU;
     sf::Text speedTextCPUPP;
     sf::Clock cpuClock, gpuClock, cpuppClock;
-    float cpuFrameTime = 0, gpuFrameTime = 0, cpuPPFrameTime = 0;
+    float cpuFPS = 0, gpuFPS = 0, cpuppFPS = 0;
 
     int width, height;
+    int cWidth, cHeight;
+
     std::vector<std::vector<bool>> gridCPU;  // CPU grid
     std::vector<std::vector<bool>> nextGridCPU;
-    std::vector<std::vector<bool>> gridGPU;  // GPU grid
-    std::vector<std::vector<bool>> nextGridGPU;
     std::vector<std::vector<bool>> gridCPUPP;  // CPUPP grid
     std::vector<std::vector<bool>> nextGridCPUPP;
-
     std::vector<std::vector<bool>> drawGridCPU;
     std::vector<std::vector<bool>> drawGridCPUPP;
-    std::vector<std::vector<bool>> drawGridGPU;
+    
+    bool* gridGPU;  // GPU grid
+    bool* drawGridGPU;
 
     pthread_mutex_t mutex;
 
     // Calculating Time
-    int updateCountCPU = 0;
-    int updateCountCPUPP = 0;
-    int updateCountGPU = 0;
     int totalUpdateCountCPU = 0; // Total updates for CPU
     int totalUpdateCountCPUPP = 0; // Total updates for GPU
     int totalUpdateCountGPU = 0; // Total updates for GPU
@@ -47,18 +89,24 @@ private:
     bool drawCPUPP = false;
     bool drawGPU = false;
 
-    int maxUpdates = std::numeric_limits<int>::max(); // Maximum updates
-
 public:
     GameOfLife(int w, int h) : width(w), height(h) {
+
+        cHeight = (height + 31) / 32 * 32;
+        cWidth = (width + 31) / 32 * 32;
+
+        cudaMemcpyToSymbol(d_width, &cWidth, sizeof(int));
+        cudaMemcpyToSymbol(d_height, &cHeight, sizeof(int));
+        cudaMemcpyToSymbol(d_draw_frequency, &DRAW_FREQUENCY, sizeof(int));
+
         // 初始化兩個 grid
         gridCPU.resize(height, std::vector<bool>(width, false));
         nextGridCPU = gridCPU;
         gridCPUPP = gridCPU;
         nextGridCPUPP = gridCPU;
 
-        gridGPU.resize(height + 2, std::vector<bool>(width + 2, false));
-        nextGridGPU = gridGPU;
+        gridGPU = new bool[(cHeight + 2) * (cWidth + 2)]();
+        cudaMallocHost(&drawGridGPU, (cHeight + 2) * (cWidth + 2) * sizeof(bool));
 
         // 創建三倍寬度的窗口
         window.create(sf::VideoMode(150 * cellSize * 3, 150 * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
@@ -99,13 +147,14 @@ public:
                 gridCPU[y][x] = value;
                 gridCPUPP[y][x] = value;
 
-                gridGPU[y+1][x+1] = value;
+                int idx = (y+1) * (width + 2) + (x+1);
+                gridGPU[idx] = value;
             }
         }
         
         drawGridCPU = gridCPU;
         drawGridCPUPP = gridCPU;
-        drawGridGPU = gridCPU;
+        drawGridGPU = gridGPU;
     }
 
     int countNeighbors(const std::vector<std::vector<bool>>& grid, int x, int y) {
@@ -150,25 +199,11 @@ public:
         gridCPUPP.swap(nextGridCPUPP);
         
     }
-
-    void updateGPU() {
-        // TODO: 實作 CUDA kernel
-        // 暫時複製 CPU 的邏輯
-        for(int y = 1; y <= height; y++) {
-            for(int x = 1; x <= width; x++) {
-                int neighbors = countNeighbors(gridGPU, x, y);
-                bool currentCell = gridGPU[y][x];
-                nextGridGPU[y][x] = (neighbors == 3) || (currentCell && neighbors == 2);
-            }
-        }
-
-        gridGPU.swap(nextGridGPU);
-    }
    
     void updateSpeedText() {
-        speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFrameTime));
-        speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFrameTime));
-        speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuPPFrameTime));
+        speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS));
+        speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS));
+        speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS));
     }
 
     static void* CPUThread(void* arg) {
@@ -233,7 +268,7 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            if (totalUpdateCountCPU >= maxUpdates) {
+            if (totalUpdateCountCPU >= MAX_UPDATES) {
                 break;
             }
 
@@ -241,20 +276,58 @@ public:
             
             totalUpdateCountCPU++; // Increment total CPU updates
 
-            if (totalUpdateCountCPU % 10 == 0) {
-                drawCPU = true;
-
+            if (totalUpdateCountCPU % DRAW_FREQUENCY == 0) {
                 pthread_mutex_lock(&mutex);
+                drawCPU = true;
                 drawGridCPU = gridCPU;
                 pthread_mutex_unlock(&mutex);
             }
             
-            cpuFrameTime = totalUpdateCountCPU / deltaTime;
+            cpuFPS = totalUpdateCountCPU / deltaTime;
         }
     }
 
     void GPU() {
+        auto lastUpdate = std::chrono::high_resolution_clock::now();
         
+        bool* d_grid, *d_nextGrid, *d_drawGrid;
+        cudaMalloc(&d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
+        cudaMemcpy(d_grid, gridGPU, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyHostToDevice);
+        
+        cudaMalloc(&d_nextGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
+        cudaMalloc(&d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
+
+        dim3 block(32, 32);
+        dim3 grid(cWidth / 32, cHeight / 32);
+
+        // cudaStream_t stream[3];
+        // for (int i = 0; i < 3; i++) {
+        //     cudaStreamCreate(&stream[i]);
+        // }
+
+        int now = 0;
+        while(windowIsOpen) {
+            auto currentTime = std::chrono::high_resolution_clock::now();
+            float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
+
+            if (totalUpdateCountGPU >= MAX_UPDATES) {
+                break;
+            }
+
+            kernel_update<<<grid, block>>>(d_grid, d_nextGrid, d_drawGrid);
+            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid, d_drawGrid);
+            
+            totalUpdateCountGPU += DRAW_FREQUENCY; // Increment total CPU updates
+
+            pthread_mutex_lock(&mutex);
+            drawGPU = true;
+            cudaMemcpy(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
+            // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
+            pthread_mutex_unlock(&mutex);
+            
+            now = (now + 1) % 3;
+            gpuFPS = totalUpdateCountGPU / deltaTime;
+        } 
     }
 
     void CPUParallel() {
@@ -264,7 +337,7 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            if (totalUpdateCountCPUPP >= maxUpdates) {
+            if (totalUpdateCountCPUPP >= MAX_UPDATES) {
                 break;
             }
 
@@ -272,15 +345,14 @@ public:
 
             totalUpdateCountCPUPP++; // Increment total CPU updates
 
-            if (totalUpdateCountCPUPP % 10 == 0) {
-                drawCPUPP = true;
-
+            if (totalUpdateCountCPUPP % DRAW_FREQUENCY == 0) {
                 pthread_mutex_lock(&mutex);
+                drawCPUPP = true;
                 drawGridCPUPP = gridCPUPP;
                 pthread_mutex_unlock(&mutex);
             }
             
-            cpuPPFrameTime = totalUpdateCountCPUPP / deltaTime;
+            cpuppFPS = totalUpdateCountCPUPP / deltaTime;
         }
     }
     
@@ -346,9 +418,11 @@ public:
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
         
-        for(int y = 1; y <= 150; y++) {
-            for(int x = 1; x <= 150; x++) {
-                if(drawGridGPU[y][x]) {
+        for(int y = 0; y < 150; y++) {
+            for(int x = 0; x < 150; x++) {
+                int idx = (y + 1) * (width + 2) + (x + 1);
+
+                if(drawGridGPU[idx]) {
                     cellGPU.setPosition(150 * 2 * cellSize + x * cellSize, y * cellSize);
                     window.draw(cellGPU);
                 }

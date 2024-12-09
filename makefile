@@ -1,13 +1,13 @@
 # Compiler settings
-CXX = g++
-CXXFLAGS = -Wall
+CXX = nvcc
+CXXFLAGS = -Xcompiler "-Wall -pthread -fopenmp"
 
 # Libraries
-LIBS = -lsfml-graphics -lsfml-window -lsfml-system -lX11 -pthread -fopenmp
+LIBS = -lsfml-graphics -lsfml-window -lsfml-system -lX11
 
 # File names
 TARGET = game_of_life
-SOURCE = game.cpp
+SOURCE = game.cu
 
 all: $(TARGET)
 	./$(TARGET)
