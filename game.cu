@@ -10,7 +10,7 @@
 #include <pthread.h>
 
 const int DRAW_FREQUENCY = 50;
-const int MAX_UPDATES = 200;
+const int MAX_UPDATES = 2000;
 
 __constant__ int d_width, d_height, d_draw_frequency;
 
@@ -19,7 +19,7 @@ __global__ void kernel_update(bool* grid, bool* nextGrid) {
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     
     int idx = (y + 1) * (d_width + 2) + (x + 1);
-    int c, neighbors, dx, dy, nx, ny;
+    int neighbors, dx, dy, nx, ny;
     bool currentCell;
 
     neighbors = 0;
@@ -40,17 +40,12 @@ __global__ void kernel_update(bool* grid, bool* nextGrid) {
 
     currentCell = grid[idx];
     nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
-
-    __syncthreads();
-
-    // copy nextGrid to grid
-    grid[idx] = nextGrid[idx];
 }
 
 class GameOfLife {
 private:
     sf::RenderWindow window;
-    float cellSize = 5.0f;
+    float cellSize = 8.0f;
     bool windowIsOpen = true;
     bool isPaused = true;
     sf::Font font;
@@ -85,10 +80,14 @@ private:
     bool drawCPUPP = false;
     bool drawGPU = false;
 
+    bool doneCPU = false;
+    bool doneCPUPP = false;
+    bool doneGPU = false;
+
 public:
     GameOfLife(int w, int h) : width(w), height(h) {
 
-        displaySize = min(150, min(width, height));
+        displaySize = min(80, min(width, height));
 
         cHeight = (height + 31) / 32 * 32;
         cWidth = (width + 31) / 32 * 32;
@@ -141,7 +140,7 @@ public:
     void randomize() {
         for(int y = 0; y < height; y++) {
             for(int x = 0; x < width; x++) {
-                int Rvalue = rand() % 2;
+                int Rvalue = rand() % 3;
                 bool value = Rvalue == 0;
 
                 gridCPU[y][x] = value;
@@ -201,9 +200,23 @@ public:
     }
    
     void updateSpeedText() {
-        speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS));
-        speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS));
-        speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS));
+        if (doneCPU) {
+            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)");
+        } else {
+            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS));
+        }
+
+        if (doneGPU) {
+            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + " (Done)");
+        } else {
+            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS));
+        }
+
+        if (doneCPUPP) {
+            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + " (Done)");
+        } else {
+            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS));
+        }
     }
 
     static void* CPUThread(void* arg) {
@@ -248,7 +261,7 @@ public:
                 drawCPU = false;
                 drawCPUPP = false;
                 drawGPU = false;
-                lastUpdate = currentTime;                
+                lastUpdate = currentTime;
 
                 draw();
             }
@@ -292,6 +305,8 @@ public:
         drawCPU = true;
         drawGridCPU = gridCPU;
         pthread_mutex_unlock(&mutex);
+
+        doneCPU = true;
     }
 
     void GPU() {
@@ -314,7 +329,6 @@ public:
 
         cudaEvent_t prev;
         cudaEventCreate(&prev);
-        cudaEventRecord(prev);
 
         int now = 0;
         while(windowIsOpen) {
@@ -323,9 +337,13 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            cudaEventSynchronize(prev);
             
             kernel_update<<<grid, block>>>(d_grid, d_nextGrid);
+            cudaEventRecord(prev);
+            cudaEventSynchronize(prev);
+
+            cudaMemcpy(d_grid, d_nextGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToDevice);
+            
             // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid);
 
             cudaError_t err = cudaGetLastError();
@@ -343,11 +361,8 @@ public:
                 pthread_mutex_lock(&mutex);
                 drawGPU = true;
                 cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
-                cudaEventRecord(prev);
                 // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
                 pthread_mutex_unlock(&mutex);
-            } else {
-                cudaEventRecord(prev);
             }
             
             now = (now + 1) % 3;
@@ -359,6 +374,8 @@ public:
         cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
         // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
         pthread_mutex_unlock(&mutex);
+
+        doneGPU = true;
     }
 
     void CPUParallel() {
@@ -392,6 +409,8 @@ public:
         drawCPUPP = true;
         drawGridCPUPP = gridCPUPP;
         pthread_mutex_unlock(&mutex);
+
+        doneCPUPP = true;
     }
     
     void handleEvent(const sf::Event& event) {
@@ -400,10 +419,6 @@ public:
             
         else if(event.type == sf::Event::KeyPressed) {
             switch(event.key.code) {
-                case sf::Keyboard::R:
-                    randomize();
-                    draw();
-                    break;
                 case sf::Keyboard::Space:
                         isPaused = !isPaused;
                     break;
@@ -458,10 +473,6 @@ public:
         // 繪製 GPU side
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
-        sf::RectangleShape ERROR(sf::Vector2f(cellSize-1, cellSize-1));
-        ERROR.setOutlineThickness(2.0f);  // 設定外框粗細為 2 像素
-        ERROR.setOutlineColor(sf::Color::Red);  // 使用不同顏色區分
-        ERROR.setFillColor(sf::Color::Transparent);  // 使用不同顏色區分
         
         for(int y = 0; y < displaySize; y++) {
             for(int x = 0; x < displaySize; x++) {
@@ -470,11 +481,6 @@ public:
                 if(drawGridGPU[idx]) {
                     cellGPU.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
                     window.draw(cellGPU);
-                }
-
-                if (drawGridGPU[idx] != drawGridCPUPP[y][x]) {
-                    ERROR.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
-                    window.draw(ERROR);
                 }
             }
         }
