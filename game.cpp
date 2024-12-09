@@ -73,17 +73,17 @@ public:
         speedTextCPU.setCharacterSize(20);
         speedTextCPU.setFillColor(sf::Color::White);
         speedTextCPU.setPosition(10, 150 * cellSize + 10);
+
+        speedTextCPUPP.setFont(font);
+        speedTextCPUPP.setCharacterSize(20);
+        speedTextCPUPP.setFillColor(sf::Color::White);
+        speedTextCPUPP.setPosition(150 * cellSize + 10, 150 * cellSize + 10);
         
         // GPU 文字
         speedTextGPU.setFont(font);
         speedTextGPU.setCharacterSize(20);
         speedTextGPU.setFillColor(sf::Color::White);
-        speedTextGPU.setPosition(150 * cellSize + 10, 150 * cellSize + 10);
-
-        speedTextCPUPP.setFont(font);
-        speedTextCPUPP.setCharacterSize(20);
-        speedTextCPUPP.setFillColor(sf::Color::White);
-        speedTextCPUPP.setPosition(150 * 2 * cellSize + 10, 150 * cellSize + 10);
+        speedTextGPU.setPosition(150 * 2 * cellSize + 10, 150 * cellSize + 10);
         
         randomize();
 
@@ -168,7 +168,7 @@ public:
     void updateSpeedText() {
         speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFrameTime));
         speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFrameTime));
-        speedTextCPUPP.setString("CPUPP FPS: " + std::to_string(cpuPPFrameTime));
+        speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuPPFrameTime));
     }
 
     static void* CPUThread(void* arg) {
@@ -294,6 +294,8 @@ public:
                     randomize();
                     draw();
                     break;
+                default:
+                    break;
             }
         }
     }
@@ -327,6 +329,18 @@ public:
             }
         }
         
+        // 繪製 CPUPP side
+        sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
+        cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
+
+        for(int y = 0; y < 150; y++) {
+            for(int x = 0; x < 150; x++) {
+                if(drawGridCPUPP[y][x]) {
+                    cellCPUPP.setPosition(150 * cellSize + x * cellSize, y * cellSize);
+                    window.draw(cellCPUPP);
+                }
+            }
+        }
 
         // 繪製 GPU side
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
@@ -335,25 +349,12 @@ public:
         for(int y = 1; y <= 150; y++) {
             for(int x = 1; x <= 150; x++) {
                 if(drawGridGPU[y][x]) {
-                    cellGPU.setPosition(150 * cellSize + x * cellSize, y * cellSize);
+                    cellGPU.setPosition(150 * 2 * cellSize + x * cellSize, y * cellSize);
                     window.draw(cellGPU);
                 }
             }
         }
         
-        // 繪製 CPUPP side
-        sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
-        cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
-
-        for(int y = 0; y < 150; y++) {
-            for(int x = 0; x < 150; x++) {
-                if(drawGridCPUPP[y][x]) {
-                    cellCPUPP.setPosition(150 * 2 * cellSize + x * cellSize, y * cellSize);
-                    window.draw(cellCPUPP);
-                }
-            }
-        }
-
         pthread_mutex_unlock(&mutex);
 
         window.draw(separator);
