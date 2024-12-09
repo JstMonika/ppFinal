@@ -14,7 +14,6 @@ private:
     sf::RenderWindow window;
     float cellSize = 3.0f;
     bool windowIsOpen = true;
-    bool isPaused = false;
     sf::Font font;
     sf::Text speedTextCPU;
     sf::Text speedTextGPU;
@@ -34,6 +33,8 @@ private:
     std::vector<std::vector<bool>> drawGridCPUPP;
     std::vector<std::vector<bool>> drawGridGPU;
 
+    pthread_mutex_t mutex;
+
     // Calculating Time
     int updateCountCPU = 0;
     int updateCountCPUPP = 0;
@@ -46,8 +47,6 @@ private:
     bool drawCPUPP = false;
     bool drawGPU = false;
 
-    bool showGrid = false;
-
     int maxUpdates = std::numeric_limits<int>::max(); // Maximum updates
 
 public:
@@ -55,18 +54,14 @@ public:
         // 初始化兩個 grid
         gridCPU.resize(height, std::vector<bool>(width, false));
         nextGridCPU = gridCPU;
-        gridGPU = gridCPU;
-        nextGridGPU = gridCPU;
         gridCPUPP = gridCPU;
         nextGridCPUPP = gridCPU;
 
-        if (width * height >= 100000) showGrid = false;
+        gridGPU.resize(height + 2, std::vector<bool>(width + 2, false));
+        nextGridGPU = gridGPU;
 
         // 創建三倍寬度的窗口
-        if (showGrid)
-            window.create(sf::VideoMode(width * cellSize * 3, height * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
-        else
-            window.create(sf::VideoMode(500 * 3, 50), "Game of Life - CPU vs GPU vs CPUPP");
+        window.create(sf::VideoMode(150 * cellSize * 3, 150 * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
         
         // Initialize font and text
         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
@@ -77,30 +72,22 @@ public:
         speedTextCPU.setFont(font);
         speedTextCPU.setCharacterSize(20);
         speedTextCPU.setFillColor(sf::Color::White);
-
-        if (showGrid) speedTextCPU.setPosition(10, height * cellSize + 10);
-        else speedTextCPU.setPosition(10, 10);
+        speedTextCPU.setPosition(10, 150 * cellSize + 10);
         
         // GPU 文字
         speedTextGPU.setFont(font);
         speedTextGPU.setCharacterSize(20);
         speedTextGPU.setFillColor(sf::Color::White);
-
-        if (showGrid) speedTextGPU.setPosition(width * cellSize + 10, height * cellSize + 10);
-        else speedTextGPU.setPosition(500 + 10, 10);
+        speedTextGPU.setPosition(150 * cellSize + 10, 150 * cellSize + 10);
 
         speedTextCPUPP.setFont(font);
         speedTextCPUPP.setCharacterSize(20);
         speedTextCPUPP.setFillColor(sf::Color::White);
-
-        if (showGrid) speedTextCPUPP.setPosition(width * 2 * cellSize + 10, height * cellSize + 10);
-        else speedTextCPUPP.setPosition(500 * 2 + 10, 10);
+        speedTextCPUPP.setPosition(150 * 2 * cellSize + 10, 150 * cellSize + 10);
         
         randomize();
 
-        drawGridCPU = gridCPU;
-        drawGridCPUPP = gridCPU;
-        drawGridGPU = gridCPU;
+        pthread_mutex_init(&mutex, NULL);
     }
     
     void randomize() {
@@ -110,11 +97,15 @@ public:
                 bool value = Rvalue == 0;
 
                 gridCPU[y][x] = value;
-                gridGPU[y][x] = value;
                 gridCPUPP[y][x] = value;
 
+                gridGPU[y+1][x+1] = value;
             }
         }
+        
+        drawGridCPU = gridCPU;
+        drawGridCPUPP = gridCPU;
+        drawGridGPU = gridCPU;
     }
 
     int countNeighbors(const std::vector<std::vector<bool>>& grid, int x, int y) {
@@ -135,8 +126,6 @@ public:
     }
 
     void updateCPU() {
-        if(isPaused) return;
-        
         for(int y = 0; y < height; y++) {
             for(int x = 0; x < width; x++) {
                 int neighbors = countNeighbors(gridCPU, x, y);
@@ -149,8 +138,6 @@ public:
     }
 
     void updateCPUParallel() {
-        if (isPaused) return;
-
         #pragma omp parallel for collapse(2) schedule(dynamic, 64)
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
@@ -165,12 +152,10 @@ public:
     }
 
     void updateGPU() {
-        if(isPaused) return;
-        
         // TODO: 實作 CUDA kernel
         // 暫時複製 CPU 的邏輯
-        for(int y = 0; y < height; y++) {
-            for(int x = 0; x < width; x++) {
+        for(int y = 1; y <= height; y++) {
+            for(int x = 1; x <= width; x++) {
                 int neighbors = countNeighbors(gridGPU, x, y);
                 bool currentCell = gridGPU[y][x];
                 nextGridGPU[y][x] = (neighbors == 3) || (currentCell && neighbors == 2);
@@ -256,9 +241,12 @@ public:
             
             totalUpdateCountCPU++; // Increment total CPU updates
 
-            if (totalUpdateCountCPU % 500 == 0) {
+            if (totalUpdateCountCPU % 10 == 0) {
                 drawCPU = true;
+
+                pthread_mutex_lock(&mutex);
                 drawGridCPU = gridCPU;
+                pthread_mutex_unlock(&mutex);
             }
             
             cpuFrameTime = totalUpdateCountCPU / deltaTime;
@@ -284,9 +272,12 @@ public:
 
             totalUpdateCountCPUPP++; // Increment total CPU updates
 
-            if (totalUpdateCountCPUPP % 500 == 0) {
+            if (totalUpdateCountCPUPP % 10 == 0) {
                 drawCPUPP = true;
+
+                pthread_mutex_lock(&mutex);
                 drawGridCPUPP = gridCPUPP;
+                pthread_mutex_unlock(&mutex);
             }
             
             cpuPPFrameTime = totalUpdateCountCPUPP / deltaTime;
@@ -299,86 +290,74 @@ public:
             
         else if(event.type == sf::Event::KeyPressed) {
             switch(event.key.code) {
-                case sf::Keyboard::Space:
-                    isPaused = !isPaused;
-                    break;
                 case sf::Keyboard::R:
                     randomize();
-                    break;
-                default:
+                    draw();
                     break;
             }
         }
-
-        // else if(event.type == sf::Event::MouseButtonPressed) {
-        //     int x = event.mouseButton.x / cellSize;
-        //     int y = event.mouseButton.y / cellSize;
-        //     if(y < height) {
-        //         // grid[y][x] = !grid[y][x];
-        //     }
-        // }
     }
-    
     
     void draw() {
         updateSpeedText();
 
         window.clear(sf::Color::Black);
         
-        if (showGrid) {
-            // 畫出分隔線
-            sf::RectangleShape separator(sf::Vector2f(2, height * cellSize + 50));
-            separator.setFillColor(sf::Color::White);
-            separator.setPosition(width * cellSize, 0);
-            
-            sf::RectangleShape separator2(sf::Vector2f(2, height * cellSize + 50));
-            separator2.setFillColor(sf::Color::White);
-            separator2.setPosition(width * 2 * cellSize, 0);
+        // 畫出分隔線
+        sf::RectangleShape separator(sf::Vector2f(2, 150 * cellSize + 50));
+        separator.setFillColor(sf::Color::White);
+        separator.setPosition(150 * cellSize, 0);
+        
+        sf::RectangleShape separator2(sf::Vector2f(2, 150 * cellSize + 50));
+        separator2.setFillColor(sf::Color::White);
+        separator2.setPosition(150 * 2 * cellSize, 0);
 
-            // 繪製 CPU side
-            sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
-            cellCPU.setFillColor(sf::Color::White);
-            
-            for(int y = 0; y < height; y++) {
-                for(int x = 0; x < width; x++) {
-                    if(drawGridCPU[y][x]) {
-                        cellCPU.setPosition(x * cellSize, y * cellSize);
-                        window.draw(cellCPU);
-                    }
+        pthread_mutex_lock(&mutex);
+
+        // 繪製 CPU side
+        sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
+        cellCPU.setFillColor(sf::Color::White);
+        
+        for(int y = 0; y < 150; y++) {
+            for(int x = 0; x < 150; x++) {
+                if(drawGridCPU[y][x]) {
+                    cellCPU.setPosition(x * cellSize, y * cellSize);
+                    window.draw(cellCPU);
                 }
             }
-            
+        }
+        
 
-            // 繪製 GPU side
-            sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
-            cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
-            
-            for(int y = 0; y < height; y++) {
-                for(int x = 0; x < width; x++) {
-                    if(drawGridGPU[y][x]) {
-                        cellGPU.setPosition(width * cellSize + x * cellSize, y * cellSize);
-                        window.draw(cellGPU);
-                    }
+        // 繪製 GPU side
+        sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
+        cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
+        
+        for(int y = 1; y <= 150; y++) {
+            for(int x = 1; x <= 150; x++) {
+                if(drawGridGPU[y][x]) {
+                    cellGPU.setPosition(150 * cellSize + x * cellSize, y * cellSize);
+                    window.draw(cellGPU);
                 }
             }
-            
-            // 繪製 CPUPP side
-            sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
-            cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
+        }
+        
+        // 繪製 CPUPP side
+        sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
+        cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
 
-            for(int y = 0; y < height; y++) {
-                for(int x = 0; x < width; x++) {
-                    if(drawGridCPUPP[y][x]) {
-                        cellCPUPP.setPosition(width * 2 * cellSize + x * cellSize, y * cellSize);
-                        window.draw(cellCPUPP);
-                    }
+        for(int y = 0; y < 150; y++) {
+            for(int x = 0; x < 150; x++) {
+                if(drawGridCPUPP[y][x]) {
+                    cellCPUPP.setPosition(150 * 2 * cellSize + x * cellSize, y * cellSize);
+                    window.draw(cellCPUPP);
                 }
             }
-
-            window.draw(separator);
-            window.draw(separator2);
         }
 
+        pthread_mutex_unlock(&mutex);
+
+        window.draw(separator);
+        window.draw(separator2);
         window.draw(speedTextCPU);
         window.draw(speedTextGPU);
         window.draw(speedTextCPUPP);
