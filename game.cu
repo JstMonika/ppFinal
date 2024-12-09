@@ -10,52 +10,41 @@
 #include <pthread.h>
 
 const int DRAW_FREQUENCY = 50;
-const int MAX_UPDATES = 500000;
+const int MAX_UPDATES = 200;
 
 __constant__ int d_width, d_height, d_draw_frequency;
 
-__global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
+__global__ void kernel_update(bool* grid, bool* nextGrid) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    nextGrid[y * (d_width + 2) + x] = false;
-    nextGrid[(y + 2) * (d_width + 2) + x] = false;
-    nextGrid[y * (d_width + 2) + x + 2] = false;
-    nextGrid[(y + 2) * (d_width + 2) + x + 2] = false;
-
-    __syncthreads();
     
     int idx = (y + 1) * (d_width + 2) + (x + 1);
     int c, neighbors, dx, dy, nx, ny;
     bool currentCell;
 
-    for (c = 0; c < d_draw_frequency; c++) {
-        neighbors = 0;
+    neighbors = 0;
 
-        // unroll
-        for (dy = -1; dy <= 1; dy++) {
-            for (dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
+    // unroll
+    for (dy = -1; dy <= 1; dy++) {
+        for (dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
 
-                nx = x + dx;
-                ny = y + dy;
+            nx = x + dx;
+            ny = y + dy;
 
-                if (grid[(ny + 1) * (d_width + 2) + (nx + 1)]) {
-                    neighbors++;
-                }
+            if (grid[(ny + 1) * (d_width + 2) + (nx + 1)]) {
+                neighbors++;
             }
         }
-
-        currentCell = grid[idx];
-        nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
-
-        __syncthreads();
-
-        // copy nextGrid to grid
-        grid[idx] = nextGrid[idx];
     }
 
-    // drawGrid[idx] = grid[idx];
+    currentCell = grid[idx];
+    nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
+
+    __syncthreads();
+
+    // copy nextGrid to grid
+    grid[idx] = nextGrid[idx];
 }
 
 class GameOfLife {
@@ -308,12 +297,12 @@ public:
     void GPU() {
         auto lastUpdate = std::chrono::high_resolution_clock::now();
         
-        bool* d_grid, *d_nextGrid, *d_drawGrid;
+        bool* d_grid, *d_nextGrid;
         cudaMalloc(&d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
         cudaMemcpy(d_grid, gridGPU, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyHostToDevice);
         
         cudaMalloc(&d_nextGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
-        cudaMalloc(&d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
+        cudaMemset(d_nextGrid, 0, (cWidth + 2) * (cHeight + 2) * sizeof(bool));
 
         dim3 block(32, 32);
         dim3 grid(cWidth / 32, cHeight / 32);
@@ -336,27 +325,30 @@ public:
 
             cudaEventSynchronize(prev);
             
-            void* args[] = {(void*)&d_grid, (void*)&d_nextGrid, (void*)&d_drawGrid};
-            cudaLaunchCooperativeKernel((void*)kernel_update, grid, block, args);
-            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid, d_drawGrid);
+            kernel_update<<<grid, block>>>(d_grid, d_nextGrid);
+            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid);
 
             cudaError_t err = cudaGetLastError();
             if (err != cudaSuccess) {
                 printf("CUDA Error: %s\n", cudaGetErrorString(err));
             }
 
-            totalUpdateCountGPU += DRAW_FREQUENCY; // Increment total CPU updates
+            totalUpdateCountGPU++;
             
             if (totalUpdateCountGPU >= MAX_UPDATES) {
                 break;
             }
 
-            pthread_mutex_lock(&mutex);
-            drawGPU = true;
-            cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
-            cudaEventRecord(prev);
-            // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
-            pthread_mutex_unlock(&mutex);
+            if (totalUpdateCountGPU % DRAW_FREQUENCY == 0) {   
+                pthread_mutex_lock(&mutex);
+                drawGPU = true;
+                cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
+                cudaEventRecord(prev);
+                // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
+                pthread_mutex_unlock(&mutex);
+            } else {
+                cudaEventRecord(prev);
+            }
             
             now = (now + 1) % 3;
             gpuFPS = totalUpdateCountGPU / deltaTime;
