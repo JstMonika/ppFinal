@@ -24,7 +24,6 @@ __global__ void kernel_update(bool* grid, bool* nextGrid) {
 
     neighbors = 0;
 
-    // unroll
     for (dy = -1; dy <= 1; dy++) {
         for (dx = -1; dx <= 1; dx++) {
             if (dx == 0 && dy == 0) continue;
@@ -73,7 +72,7 @@ private:
 
     // Calculating Time
     int totalUpdateCountCPU = 0; // Total updates for CPU
-    int totalUpdateCountCPUPP = 0; // Total updates for GPU
+    int totalUpdateCountCPUPP = 0; // Total updates for CPU Parallel
     int totalUpdateCountGPU = 0; // Total updates for GPU
 
     bool drawCPU = false;
@@ -96,7 +95,6 @@ public:
         cudaMemcpyToSymbol(d_height, &cHeight, sizeof(int));
         cudaMemcpyToSymbol(d_draw_frequency, &DRAW_FREQUENCY, sizeof(int));
 
-        // 初始化兩個 grid
         gridCPU.resize(height, std::vector<bool>(width, false));
         nextGridCPU = gridCPU;
         gridCPUPP = gridCPU;
@@ -107,15 +105,12 @@ public:
 
         cudaMallocHost(&drawGridGPU, (cHeight + 2) * (cWidth + 2) * sizeof(bool));
 
-        // 創建三倍寬度的窗口
         window.create(sf::VideoMode(displaySize * cellSize * 3 + 4, displaySize * cellSize + 70), "Game of Life - CPU vs GPU vs CPUPP");
         
-        // Initialize font and text
         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
             std::cerr << "無法載入字體" << std::endl;
         }
         
-        // CPU 文字
         speedTextCPU.setFont(font);
         speedTextCPU.setCharacterSize(20);
         speedTextCPU.setFillColor(sf::Color::White);
@@ -126,7 +121,6 @@ public:
         speedTextCPUPP.setFillColor(sf::Color::White);
         speedTextCPUPP.setPosition(displaySize * cellSize + 10, displaySize * cellSize + 10);
         
-        // GPU 文字
         speedTextGPU.setFont(font);
         speedTextGPU.setCharacterSize(20);
         speedTextGPU.setFillColor(sf::Color::White);
@@ -186,7 +180,7 @@ public:
     }
 
     void updateCPUParallel() {
-        #pragma omp parallel for collapse(2) schedule(dynamic, 64)
+        #pragma omp parallel for collapse(2)
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 int neighbors = countNeighbors(gridCPUPP, x, y);
@@ -207,7 +201,7 @@ public:
         if (doneCPU) {
             speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)\n");
         } else {
-            float estTimeCPU = remainingCPU / cpuFPS;  // 秒
+            float estTimeCPU = remainingCPU / cpuFPS;
             speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + "\n" +
                                 "Est. Time: " + std::to_string(estTimeCPU) + "s");
         }
@@ -295,7 +289,7 @@ public:
 
             updateCPU();
             
-            totalUpdateCountCPU++; // Increment total CPU updates
+            totalUpdateCountCPU++;
 
             if (totalUpdateCountCPU >= MAX_UPDATES) {
                 break;
@@ -332,15 +326,9 @@ public:
         dim3 block(32, 32);
         dim3 grid(cWidth / 32, cHeight / 32);
 
-        // cudaStream_t stream[3];
-        // for (int i = 0; i < 3; i++) {
-        //     cudaStreamCreate(&stream[i]);
-        // }
-
         cudaEvent_t prev;
         cudaEventCreate(&prev);
 
-        int now = 0;
         while(windowIsOpen) {
             if (isPaused) continue;
             
@@ -354,13 +342,6 @@ public:
 
             cudaMemcpy(d_grid, d_nextGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToDevice);
             
-            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid);
-
-            cudaError_t err = cudaGetLastError();
-            if (err != cudaSuccess) {
-                printf("CUDA Error: %s\n", cudaGetErrorString(err));
-            }
-
             totalUpdateCountGPU++;
             
             if (totalUpdateCountGPU >= MAX_UPDATES) {
@@ -371,18 +352,15 @@ public:
                 pthread_mutex_lock(&mutex);
                 drawGPU = true;
                 cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
-                // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
                 pthread_mutex_unlock(&mutex);
             }
             
-            now = (now + 1) % 3;
             gpuFPS = totalUpdateCountGPU / deltaTime;
         } 
 
         pthread_mutex_lock(&mutex);
         drawGPU = true;
         cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
-        // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
         pthread_mutex_unlock(&mutex);
 
         doneGPU = true;
@@ -399,7 +377,7 @@ public:
 
             updateCPUParallel();
 
-            totalUpdateCountCPUPP++; // Increment total CPU updates
+            totalUpdateCountCPUPP++;
             
             if (totalUpdateCountCPUPP >= MAX_UPDATES) {
                 break;
@@ -445,7 +423,6 @@ public:
 
         window.clear(sf::Color::Black);
         
-        // 畫出分隔線
         sf::RectangleShape separator(sf::Vector2f(2, displaySize * cellSize + 50));
         separator.setFillColor(sf::Color::White);
         separator.setPosition(displaySize * cellSize, 0);
@@ -454,7 +431,6 @@ public:
         separator2.setFillColor(sf::Color::White);
         separator2.setPosition(displaySize * 2 * cellSize + 2, 0);
 
-        // 繪製 CPU side
         sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellCPU.setFillColor(sf::Color::White);
         
@@ -467,9 +443,8 @@ public:
             }
         }
         
-        // 繪製 CPUPP side
         sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
-        cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
+        cellCPUPP.setFillColor(sf::Color::Green);
 
         for(int y = 0; y < displaySize; y++) {
             for(int x = 0; x < displaySize; x++) {
@@ -480,9 +455,8 @@ public:
             }
         }
 
-        // 繪製 GPU side
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
-        cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
+        cellGPU.setFillColor(sf::Color::Yellow);
         
         for(int y = 0; y < displaySize; y++) {
             for(int x = 0; x < displaySize; x++) {
@@ -509,7 +483,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(1024, 1024);  // 80x60 grid
+    GameOfLife game(1024, 1024);
     game.run();
     return 0;
 }
