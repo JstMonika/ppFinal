@@ -27,6 +27,12 @@ int main() {
         std::cout << "Number of multiprocessors: " 
                   << deviceProp.multiProcessorCount << std::endl;
         std::cout << std::endl;
+
+        size_t freeMem, totalMem;
+        cudaMemGetInfo(&freeMem, &totalMem);
+
+        std::cout << "Total Global Memory: " << deviceProp.totalGlobalMem / (1024*1024) << " MB\n";
+        std::cout << "Available Memory: " << freeMem / (1024*1024) << " MB\n";
     }
 
     return 0;
