@@ -43,6 +43,9 @@ __global__ void kernel_update(bool* grid, bool* nextGrid) {
 
 class GameOfLife {
 private:
+
+    std::chrono::time_point<std::chrono::high_resolution_clock> sysStart, clockCPU, clockGPU, clockCPUPP;
+
     sf::RenderWindow window;
     float cellSize = 8.0f;
     bool windowIsOpen = true;
@@ -51,7 +54,6 @@ private:
     sf::Text speedTextCPU;
     sf::Text speedTextGPU;
     sf::Text speedTextCPUPP;
-    sf::Clock cpuClock, gpuClock, cpuppClock;
     float cpuFPS = 0, gpuFPS = 0, cpuppFPS = 0;
 
     int displaySize;
@@ -199,27 +201,30 @@ public:
         float remainingGPU = MAX_UPDATES - totalUpdateCountGPU;
         
         if (doneCPU) {
-            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)\n");
+            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)\n" + 
+                                "Toal Time: " + std::to_string(std::chrono::duration<float>(clockCPU - sysStart).count()) + "s");
         } else {
             float estTimeCPU = remainingCPU / cpuFPS;
             speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + "\n" +
-                                "Est. Time: " + std::to_string(estTimeCPU) + "s");
+                                "Est. Remaining Time: " + std::to_string(estTimeCPU) + "s");
         }
 
         if (doneGPU) {
-            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + " (Done)\n");
+            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + " (Done)\n" + 
+                                "Total Time: " + std::to_string(std::chrono::duration<float>(clockGPU - sysStart).count()) + "s");
         } else {
             float estTimeGPU = remainingGPU / gpuFPS;
             speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + "\n" +
-                                "Est. Time: " + std::to_string(estTimeGPU) + "s");
+                                "Est. Remaining Time: " + std::to_string(estTimeGPU) + "s");
         }
 
         if (doneCPUPP) {
-            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + " (Done)\n");
+            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + " (Done)\n" + 
+                                    "Total Time: " + std::to_string(std::chrono::duration<float>(clockCPUPP - sysStart).count()) + "s");
         } else {
             float estTimeCPUPP = remainingCPUPP / cpuppFPS;
             speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + "\n" +
-                                    "Est. Time: " + std::to_string(estTimeCPUPP) + "s");
+                                    "Est. Remaining Time: " + std::to_string(estTimeCPUPP) + "s");
         }
     }
 
@@ -311,6 +316,7 @@ public:
         pthread_mutex_unlock(&mutex);
 
         doneCPU = true;
+        clockCPU = std::chrono::high_resolution_clock::now();
     }
 
     void GPU() {
@@ -364,6 +370,7 @@ public:
         pthread_mutex_unlock(&mutex);
 
         doneGPU = true;
+        clockGPU = std::chrono::high_resolution_clock::now();
     }
 
     void CPUParallel() {
@@ -399,6 +406,7 @@ public:
         pthread_mutex_unlock(&mutex);
 
         doneCPUPP = true;
+        clockCPUPP = std::chrono::high_resolution_clock::now();
     }
     
     void handleEvent(const sf::Event& event) {
@@ -408,7 +416,15 @@ public:
         else if(event.type == sf::Event::KeyPressed) {
             switch(event.key.code) {
                 case sf::Keyboard::Space:
-                        isPaused = !isPaused;
+                    if (isPaused) {
+                        sysStart = std::chrono::high_resolution_clock::now();
+                        clockCPU = sysStart;
+                        clockGPU = sysStart;
+                        clockCPUPP = sysStart;
+
+                        isPaused = false;
+                    }
+
                     break;
                 default:
                     break;
