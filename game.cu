@@ -9,6 +9,8 @@
 #include <sched.h>
 #include <pthread.h>
 
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
 
 const int DRAW_FREQUENCY = 50;
 const int MAX_UPDATES = 500000;
@@ -16,6 +18,8 @@ const int MAX_UPDATES = 500000;
 __constant__ int d_width, d_height, d_draw_frequency;
 
 __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
+    cg::grid_group g = cg::this_grid();
+
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -23,6 +27,8 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
     nextGrid[(y + 2) * (d_width + 2) + x] = false;
     nextGrid[y * (d_width + 2) + x + 2] = false;
     nextGrid[(y + 2) * (d_width + 2) + x + 2] = false;
+
+    g.sync();
     
     int idx = (y + 1) * (d_width + 2) + (x + 1);
     int c, neighbors, dx, dy, nx, ny;
@@ -48,12 +54,12 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
         currentCell = grid[idx];
         nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
 
-        __syncthreads();
+        g.sync();
 
         // copy nextGrid to grid
         grid[idx] = nextGrid[idx];
 
-        __syncthreads();
+        g.sync();
     }
 
     // drawGrid[idx] = grid[idx];
@@ -282,13 +288,13 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            if (totalUpdateCountCPU >= MAX_UPDATES) {
-                break;
-            }
-
             updateCPU();
             
             totalUpdateCountCPU++; // Increment total CPU updates
+
+            if (totalUpdateCountCPU >= MAX_UPDATES) {
+                break;
+            }
 
             if (totalUpdateCountCPU % DRAW_FREQUENCY == 0) {
                 pthread_mutex_lock(&mutex);
@@ -324,6 +330,10 @@ public:
         //     cudaStreamCreate(&stream[i]);
         // }
 
+        cudaEvent_t prev;
+        cudaEventCreate(&prev);
+        cudaEventRecord(prev);
+
         int now = 0;
         while(windowIsOpen) {
             if (isPaused) continue;
@@ -331,18 +341,22 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
+            cudaEventSynchronize(prev);
+
+            void* args[] = {(void*)&d_grid, (void*)&d_nextGrid, (void*)&d_drawGrid};
+            cudaLaunchCooperativeKernel((void*)kernel_update, grid, block, args);
+            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid, d_drawGrid);
+            
+            totalUpdateCountGPU += DRAW_FREQUENCY; // Increment total CPU updates
+            
             if (totalUpdateCountGPU >= MAX_UPDATES) {
                 break;
             }
 
-            kernel_update<<<grid, block>>>(d_grid, d_nextGrid, d_drawGrid);
-            // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid, d_drawGrid);
-            
-            totalUpdateCountGPU += DRAW_FREQUENCY; // Increment total CPU updates
-
             pthread_mutex_lock(&mutex);
             drawGPU = true;
             cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
+            cudaEventRecord(prev);
             // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
             pthread_mutex_unlock(&mutex);
             
@@ -366,13 +380,13 @@ public:
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
-            if (totalUpdateCountCPUPP >= MAX_UPDATES) {
-                break;
-            }
-
             updateCPUParallel();
 
             totalUpdateCountCPUPP++; // Increment total CPU updates
+
+            if (totalUpdateCountCPUPP >= MAX_UPDATES) {
+                break;
+            }
 
             if (totalUpdateCountCPUPP % DRAW_FREQUENCY == 0) {
                 pthread_mutex_lock(&mutex);
@@ -480,7 +494,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(1000, 1000);  // 80x60 grid
+    GameOfLife game(32, 32);  // 80x60 grid
     game.run();
     return 0;
 }
