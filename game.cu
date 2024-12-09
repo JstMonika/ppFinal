@@ -9,17 +9,12 @@
 #include <sched.h>
 #include <pthread.h>
 
-#include <cooperative_groups.h>
-namespace cg = cooperative_groups;
-
 const int DRAW_FREQUENCY = 50;
 const int MAX_UPDATES = 500000;
 
 __constant__ int d_width, d_height, d_draw_frequency;
 
 __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
-    cg::grid_group g = cg::this_grid();
-
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
@@ -28,7 +23,7 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
     nextGrid[y * (d_width + 2) + x + 2] = false;
     nextGrid[(y + 2) * (d_width + 2) + x + 2] = false;
 
-    g.sync();
+    __syncthreads();
     
     int idx = (y + 1) * (d_width + 2) + (x + 1);
     int c, neighbors, dx, dy, nx, ny;
@@ -54,12 +49,10 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
         currentCell = grid[idx];
         nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
 
-        g.sync();
+        __syncthreads();
 
         // copy nextGrid to grid
         grid[idx] = nextGrid[idx];
-
-        g.sync();
     }
 
     // drawGrid[idx] = grid[idx];
@@ -68,7 +61,7 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
 class GameOfLife {
 private:
     sf::RenderWindow window;
-    float cellSize = 3.0f;
+    float cellSize = 5.0f;
     bool windowIsOpen = true;
     bool isPaused = true;
     sf::Font font;
@@ -342,11 +335,16 @@ public:
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
             cudaEventSynchronize(prev);
-
+            
             void* args[] = {(void*)&d_grid, (void*)&d_nextGrid, (void*)&d_drawGrid};
             cudaLaunchCooperativeKernel((void*)kernel_update, grid, block, args);
             // kernel_update<<<grid, block, 0, stream[now]>>>(d_grid, d_nextGrid, d_drawGrid);
-            
+
+            cudaError_t err = cudaGetLastError();
+            if (err != cudaSuccess) {
+                printf("CUDA Error: %s\n", cudaGetErrorString(err));
+            }
+
             totalUpdateCountGPU += DRAW_FREQUENCY; // Increment total CPU updates
             
             if (totalUpdateCountGPU >= MAX_UPDATES) {
@@ -376,14 +374,14 @@ public:
         
         while(windowIsOpen) {
             if (isPaused) continue;
-            
+
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
             updateCPUParallel();
 
             totalUpdateCountCPUPP++; // Increment total CPU updates
-
+            
             if (totalUpdateCountCPUPP >= MAX_UPDATES) {
                 break;
             }
@@ -415,7 +413,7 @@ public:
                     draw();
                     break;
                 case sf::Keyboard::Space:
-                    isPaused = !isPaused;
+                        isPaused = !isPaused;
                     break;
                 default:
                     break;
@@ -468,6 +466,10 @@ public:
         // 繪製 GPU side
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
+        sf::RectangleShape ERROR(sf::Vector2f(cellSize-1, cellSize-1));
+        ERROR.setOutlineThickness(2.0f);  // 設定外框粗細為 2 像素
+        ERROR.setOutlineColor(sf::Color::Red);  // 使用不同顏色區分
+        ERROR.setFillColor(sf::Color::Transparent);  // 使用不同顏色區分
         
         for(int y = 0; y < displaySize; y++) {
             for(int x = 0; x < displaySize; x++) {
@@ -476,6 +478,11 @@ public:
                 if(drawGridGPU[idx]) {
                     cellGPU.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
                     window.draw(cellGPU);
+                }
+
+                if (drawGridGPU[idx] != drawGridCPUPP[y][x]) {
+                    ERROR.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
+                    window.draw(ERROR);
                 }
             }
         }
@@ -494,7 +501,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(32, 32);  // 80x60 grid
+    GameOfLife game(1024, 1024);  // 80x60 grid
     game.run();
     return 0;
 }
