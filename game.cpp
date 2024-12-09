@@ -136,31 +136,19 @@ public:
 
     void* cpuPPCalculateGrid(void* arg) {
         int id = *((int*)arg);
-        while(true){
-            int local_height;
-            pthread_mutex_lock(&heightMutex);
-            local_height = cur_height++;
-            pthread_mutex_unlock(&heightMutex);
+        int chunk_height = height / (CPU_COUNT(&cpu_set) - 3);
+        int start = id * chunk_height;
+        int end = (id + 1) * chunk_height;
+        if (id == CPU_COUNT(&cpu_set) - 4) end = height;
 
-            if(local_height>= height) break;
-            for(int i = 0 ; i < width; i++){
-                int neighbors = 0;
-                for(int dy = -1; dy <= 1; dy++) {
-                    for(int dx = -1; dx <= 1; dx++) {
-                        if(dx == 0 && dy == 0) continue;
-                        
-                        int nx = i + dx;
-                        int ny = local_height + dy;
-                        if (ny < 0 || ny >= height) continue;
-                        if (nx < 0 || nx >= width) continue;
-                        
-                        if(gridCPUPP[ny][nx]) neighbors++;
-                    }
-                }
-                bool currentCell = gridCPUPP[local_height][i];
-                nextGridCPUPP[local_height][i] = (neighbors == 3) || (currentCell && neighbors == 2);
+        for(int y = start; y < end; y++) {
+            for(int x = 0; x < width; x++) {
+                int neighbors = countNeighbors(gridCPUPP, x, y);
+                bool currentCell = gridCPUPP[y][x];
+                nextGridCPUPP[y][x] = (neighbors == 3) || (currentCell && neighbors == 2);
             }
         }
+
         return NULL;
     }
 
@@ -174,7 +162,7 @@ public:
 
         for (int i = 0; i < cpu_num; i++){
             ids[i] = i;
-            threads[i] = std::thread(std::bind(&GameOfLife::cpuPPCalculateGrid, this, &ids[i]));
+            threads[i] = std::thread(&GameOfLife::cpuPPCalculateGrid, this, &ids[i]);
         }
 
         for (int i = 0; i < cpu_num; i++){
