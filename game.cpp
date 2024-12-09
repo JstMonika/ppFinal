@@ -31,6 +31,11 @@ private:
 
 
     pthread_mutex_t mutex;
+    pthread_mutex_t heightMutex;
+    cpu_set_t cpu_set;
+
+    // Variables for CPUPP
+    int cur_height = 0;
 
     // Calculating Time
     int updateCountCPU = 0;
@@ -40,6 +45,10 @@ private:
     
 public:
     GameOfLife(int w, int h) : width(w), height(h) {
+        // fetch cpu_set
+        sched_getaffinity(0, sizeof(cpu_set), &cpu_set);
+
+
         // 初始化兩個 grid
         gridCPU.resize(height, std::vector<bool>(width, false));
         nextGridCPU = gridCPU;
@@ -125,16 +134,51 @@ public:
         pthread_mutex_unlock(&mutex);
     }
 
+    void* cpuPPCalculateGrid(void* arg) {
+        int id = *((int*)arg);
+        while(true){
+            int local_height;
+            pthread_mutex_lock(&heightMutex);
+            local_height = cur_height++;
+            pthread_mutex_unlock(&heightMutex);
+
+            if(local_height>= height) break;
+            for(int i = 0 ; i < width; i++){
+                int neighbors = 0;
+                for(int dy = -1; dy <= 1; dy++) {
+                    for(int dx = -1; dx <= 1; dx++) {
+                        if(dx == 0 && dy == 0) continue;
+                        
+                        int nx = i + dx;
+                        int ny = local_height + dy;
+                        if (ny < 0 || ny >= height) continue;
+                        if (nx < 0 || nx >= width) continue;
+                        
+                        if(gridCPUPP[ny][nx]) neighbors++;
+                    }
+                }
+                bool currentCell = gridCPUPP[local_height][i];
+                nextGridCPUPP[local_height][i] = (neighbors == 3) || (currentCell && neighbors == 2);
+            }
+        }
+        return NULL;
+    }
+
     void updateCPUParallel() {
         if (isPaused) return;
 
-        #pragma omp parallel for collapse(2)
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int neighbors = countNeighbors(gridCPUPP, x, y);
-                bool currentCell = gridCPUPP[y][x];
-                nextGridCPU[y][x] = (neighbors == 3) || (currentCell && neighbors == 2);
-            }
+        cur_height = 0;
+        int cpu_num = CPU_COUNT(&cpu_set) - 3;
+        std::vector<std::thread> threads(cpu_num);
+        std::vector<int> ids(cpu_num);
+
+        for (int i = 0; i < cpu_num; i++){
+            ids[i] = i;
+            threads[i] = std::thread(std::bind(&GameOfLife::cpuPPCalculateGrid, this, &ids[i]));
+        }
+
+        for (int i = 0; i < cpu_num; i++){
+            threads[i].join();
         }
 
         pthread_mutex_lock(&mutex);
@@ -357,6 +401,7 @@ public:
 
 int main() {
     XInitThreads();
+    
 
     GameOfLife game(100, 100);  // 80x60 grid
     game.run();
