@@ -58,6 +58,7 @@ private:
     sf::RenderWindow window;
     float cellSize = 3.0f;
     bool windowIsOpen = true;
+    bool isPaused = true;
     sf::Font font;
     sf::Text speedTextCPU;
     sf::Text speedTextGPU;
@@ -65,6 +66,7 @@ private:
     sf::Clock cpuClock, gpuClock, cpuppClock;
     float cpuFPS = 0, gpuFPS = 0, cpuppFPS = 0;
 
+    int displaySize;
     int width, height;
     int cWidth, cHeight;
 
@@ -92,6 +94,8 @@ private:
 public:
     GameOfLife(int w, int h) : width(w), height(h) {
 
+        displaySize = min(150, min(width, height));
+
         cHeight = (height + 31) / 32 * 32;
         cWidth = (width + 31) / 32 * 32;
 
@@ -109,7 +113,7 @@ public:
         cudaMallocHost(&drawGridGPU, (cHeight + 2) * (cWidth + 2) * sizeof(bool));
 
         // 創建三倍寬度的窗口
-        window.create(sf::VideoMode(150 * cellSize * 3, 150 * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
+        window.create(sf::VideoMode(displaySize * cellSize * 3 + 4, displaySize * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
         
         // Initialize font and text
         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
@@ -120,18 +124,18 @@ public:
         speedTextCPU.setFont(font);
         speedTextCPU.setCharacterSize(20);
         speedTextCPU.setFillColor(sf::Color::White);
-        speedTextCPU.setPosition(10, 150 * cellSize + 10);
+        speedTextCPU.setPosition(10, displaySize * cellSize + 10);
 
         speedTextCPUPP.setFont(font);
         speedTextCPUPP.setCharacterSize(20);
         speedTextCPUPP.setFillColor(sf::Color::White);
-        speedTextCPUPP.setPosition(150 * cellSize + 10, 150 * cellSize + 10);
+        speedTextCPUPP.setPosition(displaySize * cellSize + 10, displaySize * cellSize + 10);
         
         // GPU 文字
         speedTextGPU.setFont(font);
         speedTextGPU.setCharacterSize(20);
         speedTextGPU.setFillColor(sf::Color::White);
-        speedTextGPU.setPosition(150 * 2 * cellSize + 10, 150 * cellSize + 10);
+        speedTextGPU.setPosition(displaySize * 2 * cellSize + 10, displaySize * cellSize + 10);
         
         randomize();
 
@@ -265,6 +269,8 @@ public:
         auto lastUpdate = std::chrono::high_resolution_clock::now();
         
         while(windowIsOpen) {
+            if (isPaused) continue;
+
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
@@ -307,6 +313,8 @@ public:
 
         int now = 0;
         while(windowIsOpen) {
+            if (isPaused) continue;
+            
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
@@ -334,6 +342,8 @@ public:
         auto lastUpdate = std::chrono::high_resolution_clock::now();
         
         while(windowIsOpen) {
+            if (isPaused) continue;
+            
             auto currentTime = std::chrono::high_resolution_clock::now();
             float deltaTime = std::chrono::duration<float>(currentTime - lastUpdate).count();
 
@@ -366,6 +376,9 @@ public:
                     randomize();
                     draw();
                     break;
+                case sf::Keyboard::Space:
+                    isPaused = !isPaused;
+                    break;
                 default:
                     break;
             }
@@ -378,13 +391,13 @@ public:
         window.clear(sf::Color::Black);
         
         // 畫出分隔線
-        sf::RectangleShape separator(sf::Vector2f(2, 150 * cellSize + 50));
+        sf::RectangleShape separator(sf::Vector2f(2, displaySize * cellSize + 50));
         separator.setFillColor(sf::Color::White);
-        separator.setPosition(150 * cellSize, 0);
+        separator.setPosition(displaySize * cellSize, 0);
         
-        sf::RectangleShape separator2(sf::Vector2f(2, 150 * cellSize + 50));
+        sf::RectangleShape separator2(sf::Vector2f(2, displaySize * cellSize + 50));
         separator2.setFillColor(sf::Color::White);
-        separator2.setPosition(150 * 2 * cellSize, 0);
+        separator2.setPosition(displaySize * 2 * cellSize + 2, 0);
 
         pthread_mutex_lock(&mutex);
 
@@ -392,8 +405,8 @@ public:
         sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellCPU.setFillColor(sf::Color::White);
         
-        for(int y = 0; y < 150; y++) {
-            for(int x = 0; x < 150; x++) {
+        for(int y = 0; y < displaySize; y++) {
+            for(int x = 0; x < displaySize; x++) {
                 if(drawGridCPU[y][x]) {
                     cellCPU.setPosition(x * cellSize, y * cellSize);
                     window.draw(cellCPU);
@@ -405,10 +418,10 @@ public:
         sf::RectangleShape cellCPUPP(sf::Vector2f(cellSize-1, cellSize-1));
         cellCPUPP.setFillColor(sf::Color::Green);  // 使用不同顏色區分
 
-        for(int y = 0; y < 150; y++) {
-            for(int x = 0; x < 150; x++) {
+        for(int y = 0; y < displaySize; y++) {
+            for(int x = 0; x < displaySize; x++) {
                 if(drawGridCPUPP[y][x]) {
-                    cellCPUPP.setPosition(150 * cellSize + x * cellSize, y * cellSize);
+                    cellCPUPP.setPosition(displaySize * cellSize + x * cellSize + 2, y * cellSize);
                     window.draw(cellCPUPP);
                 }
             }
@@ -418,12 +431,12 @@ public:
         sf::RectangleShape cellGPU(sf::Vector2f(cellSize-1, cellSize-1));
         cellGPU.setFillColor(sf::Color::Yellow);  // 使用不同顏色區分
         
-        for(int y = 0; y < 150; y++) {
-            for(int x = 0; x < 150; x++) {
+        for(int y = 0; y < displaySize; y++) {
+            for(int x = 0; x < displaySize; x++) {
                 int idx = (y + 1) * (width + 2) + (x + 1);
 
                 if(drawGridGPU[idx]) {
-                    cellGPU.setPosition(150 * 2 * cellSize + x * cellSize, y * cellSize);
+                    cellGPU.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
                     window.draw(cellGPU);
                 }
             }
