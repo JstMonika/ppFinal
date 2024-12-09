@@ -108,7 +108,7 @@ public:
         cudaMallocHost(&drawGridGPU, (cHeight + 2) * (cWidth + 2) * sizeof(bool));
 
         // 創建三倍寬度的窗口
-        window.create(sf::VideoMode(displaySize * cellSize * 3 + 4, displaySize * cellSize + 50), "Game of Life - CPU vs GPU vs CPUPP");
+        window.create(sf::VideoMode(displaySize * cellSize * 3 + 4, displaySize * cellSize + 70), "Game of Life - CPU vs GPU vs CPUPP");
         
         // Initialize font and text
         if (!font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")) {
@@ -200,22 +200,32 @@ public:
     }
    
     void updateSpeedText() {
+        float remainingCPU = MAX_UPDATES - totalUpdateCountCPU;
+        float remainingCPUPP = MAX_UPDATES - totalUpdateCountCPUPP;
+        float remainingGPU = MAX_UPDATES - totalUpdateCountGPU;
+        
         if (doneCPU) {
-            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)");
+            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + " (Done)\n");
         } else {
-            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS));
+            float estTimeCPU = remainingCPU / cpuFPS;  // 秒
+            speedTextCPU.setString("CPU FPS: " + std::to_string(cpuFPS) + "\n" +
+                                "Est. Time: " + std::to_string(estTimeCPU) + "s");
         }
 
         if (doneGPU) {
-            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + " (Done)");
+            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + " (Done)\n");
         } else {
-            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS));
+            float estTimeGPU = remainingGPU / gpuFPS;
+            speedTextGPU.setString("GPU FPS: " + std::to_string(gpuFPS) + "\n" +
+                                "Est. Time: " + std::to_string(estTimeGPU) + "s");
         }
 
         if (doneCPUPP) {
-            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + " (Done)");
+            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + " (Done)\n");
         } else {
-            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS));
+            float estTimeCPUPP = remainingCPUPP / cpuppFPS;
+            speedTextCPUPP.setString("CPU Parallel FPS: " + std::to_string(cpuppFPS) + "\n" +
+                                    "Est. Time: " + std::to_string(estTimeCPUPP) + "s");
         }
     }
 
