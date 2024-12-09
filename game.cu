@@ -39,18 +39,24 @@ __global__ void kernel_update(bool* grid, bool* nextGrid, bool* drawGrid) {
                 nx = x + dx;
                 ny = y + dy;
 
-                if (grid[ny * (d_width + 2) + nx]) neighbors++;
+                if (grid[(ny + 1) * (d_width + 2) + (nx + 1)]) {
+                    neighbors++;
+                }
             }
         }
 
         currentCell = grid[idx];
         nextGrid[idx] = (neighbors == 3) || (currentCell && neighbors == 2);
 
+        __syncthreads();
+
         // copy nextGrid to grid
         grid[idx] = nextGrid[idx];
+
+        __syncthreads();
     }
 
-    drawGrid[idx] = grid[idx];
+    // drawGrid[idx] = grid[idx];
 }
 
 class GameOfLife {
@@ -109,7 +115,9 @@ public:
         gridCPUPP = gridCPU;
         nextGridCPUPP = gridCPU;
 
-        gridGPU = new bool[(cHeight + 2) * (cWidth + 2)]();
+        gridGPU = new bool[(cHeight + 2) * (cWidth + 2)];
+        std::fill_n(gridGPU, (cHeight + 2) * (cWidth + 2), false);
+
         cudaMallocHost(&drawGridGPU, (cHeight + 2) * (cWidth + 2) * sizeof(bool));
 
         // 創建三倍寬度的窗口
@@ -151,7 +159,7 @@ public:
                 gridCPU[y][x] = value;
                 gridCPUPP[y][x] = value;
 
-                int idx = (y+1) * (width + 2) + (x+1);
+                int idx = (y+1) * (cWidth + 2) + (x+1);
                 gridGPU[idx] = value;
             }
         }
@@ -291,6 +299,11 @@ public:
             
             cpuFPS = totalUpdateCountCPU / deltaTime;
         }
+
+        pthread_mutex_lock(&mutex);
+        drawCPU = true;
+        drawGridCPU = gridCPU;
+        pthread_mutex_unlock(&mutex);
     }
 
     void GPU() {
@@ -329,13 +342,19 @@ public:
 
             pthread_mutex_lock(&mutex);
             drawGPU = true;
-            cudaMemcpy(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
+            cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
             // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
             pthread_mutex_unlock(&mutex);
             
             now = (now + 1) % 3;
             gpuFPS = totalUpdateCountGPU / deltaTime;
         } 
+
+        pthread_mutex_lock(&mutex);
+        drawGPU = true;
+        cudaMemcpy(drawGridGPU, d_grid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost);
+        // cudaMemcpyAsync(drawGridGPU, d_drawGrid, (cWidth + 2) * (cHeight + 2) * sizeof(bool), cudaMemcpyDeviceToHost, stream[now]);
+        pthread_mutex_unlock(&mutex);
     }
 
     void CPUParallel() {
@@ -364,6 +383,11 @@ public:
             
             cpuppFPS = totalUpdateCountCPUPP / deltaTime;
         }
+
+        pthread_mutex_lock(&mutex);
+        drawCPUPP = true;
+        drawGridCPUPP = gridCPUPP;
+        pthread_mutex_unlock(&mutex);
     }
     
     void handleEvent(const sf::Event& event) {
@@ -386,6 +410,8 @@ public:
     }
     
     void draw() {
+        pthread_mutex_lock(&mutex);
+
         updateSpeedText();
 
         window.clear(sf::Color::Black);
@@ -398,8 +424,6 @@ public:
         sf::RectangleShape separator2(sf::Vector2f(2, displaySize * cellSize + 50));
         separator2.setFillColor(sf::Color::White);
         separator2.setPosition(displaySize * 2 * cellSize + 2, 0);
-
-        pthread_mutex_lock(&mutex);
 
         // 繪製 CPU side
         sf::RectangleShape cellCPU(sf::Vector2f(cellSize-1, cellSize-1));
@@ -433,7 +457,7 @@ public:
         
         for(int y = 0; y < displaySize; y++) {
             for(int x = 0; x < displaySize; x++) {
-                int idx = (y + 1) * (width + 2) + (x + 1);
+                int idx = (y + 1) * (cWidth + 2) + (x + 1);
 
                 if(drawGridGPU[idx]) {
                     cellGPU.setPosition(displaySize * 2 * cellSize + x * cellSize + 4, y * cellSize);
@@ -441,8 +465,6 @@ public:
                 }
             }
         }
-        
-        pthread_mutex_unlock(&mutex);
 
         window.draw(separator);
         window.draw(separator2);
@@ -450,6 +472,8 @@ public:
         window.draw(speedTextGPU);
         window.draw(speedTextCPUPP);
         window.display();
+
+        pthread_mutex_unlock(&mutex);
     }
 };
 
