@@ -10,7 +10,8 @@
 #include <pthread.h>
 
 const int DRAW_FREQUENCY = 50;
-const int MAX_UPDATES = 2000;
+const int MAX_UPDATES = 1000;
+const int EXECUTE_SIZE = 1024;
 
 __constant__ int d_width, d_height, d_draw_frequency;
 
@@ -499,7 +500,7 @@ public:
 int main() {
     XInitThreads();
 
-    GameOfLife game(1024, 1024);
+    GameOfLife game(EXECUTE_SIZE, EXECUTE_SIZE);
     game.run();
     return 0;
 }
